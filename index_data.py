@@ -1,20 +1,22 @@
 import json
 import time
-
 import requests
 from tqdm import tqdm
 
-ES_URL = "https://localhost:9200"  # было http
+# Отключаем предупреждения SSL (для разработки)
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+ES_URL = "http://localhost:9200"  # ИЗМЕНИЛ НА HTTP
 INDEX_NAME = "autoru_mag"
 DATA_FILE = "data_auto.jsonl"
-AUTH = ("admin", "StrongPassw0rd!")  # как в docker-compose.yml
+AUTH = ("admin", "StrongPassw0rd!")
 
 
 def create_index():
     url = f"{ES_URL}/{INDEX_NAME}"
-    # если индекс уже есть — удаляем
     try:
-        resp = requests.head(url, auth=AUTH, verify=False)
+        resp = requests.head(url, auth=AUTH)
         if resp.status_code == 200:
             requests.delete(url, auth=AUTH)
     except requests.exceptions.ConnectionError:
@@ -48,7 +50,7 @@ def create_index():
         },
     }
 
-    r = requests.put(url, json=body, auth=AUTH, verify=False)
+    r = requests.put(url, json=body, auth=AUTH)
     r.raise_for_status()
 
 
@@ -65,9 +67,12 @@ def bulk_index():
             lines.append(json.dumps(meta, ensure_ascii=False))
             lines.append(json.dumps(doc, ensure_ascii=False))
         payload = "\n".join(lines) + "\n"
-        r = requests.post(f"{ES_URL}/_bulk", data=payload.encode("utf-8"),
-                          headers={"Content-Type": "application/x-ndjson"},
-                          auth=AUTH, verify=False)
+        r = requests.post(
+            f"{ES_URL}/_bulk",
+            data=payload.encode("utf-8"),
+            headers={"Content-Type": "application/x-ndjson"},
+            auth=AUTH
+        )
         r.raise_for_status()
         time.sleep(0.1)
 
