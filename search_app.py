@@ -47,8 +47,8 @@ def build_synonym_query(q: str) -> str | None:
 
 def build_query_body(q: str) -> dict:
     syn_q = build_synonym_query(q)
-    print(f" DEBUG: Запрос '{q}' → синонимы: {syn_q}")
-    fields = ["title^3", "text"]
+    fields = ["title^4", "text"]
+
 
     should_queries = [
         {
@@ -62,6 +62,67 @@ def build_query_body(q: str) -> dict:
         }
     ]
 
+    year_match = re.search(r'\b(202[4-7])\b', q)
+    if year_match:
+        year = year_match.group(1)
+        should_queries.append({
+            "match_phrase": {
+                "title": {
+                    "query": year,
+                    "boost": 5.0
+                }
+            }
+        })
+
+    if any(term in q.lower() for term in ['vin', 'vincode', 'vin-код', 'вин']):
+        should_queries.extend([
+            {
+                "match_phrase": {
+                    "title": {
+                        "query": "vin",
+                        "boost": 6.0
+                    }
+                }
+            },
+            {
+                "match_phrase": {
+                    "text": {
+                        "query": "vin",
+                        "boost": 4.0
+                    }
+                }
+            }
+        ])
+
+    must_not = [
+        {"match_phrase": {"title": "Главное за день"}},
+        {"match_phrase": {"title": "главное за день"}}
+    ]
+
+    if any(word in q.lower() for word in ['снижение', 'падение', 'дешевеет']):
+        must_not.extend([
+            {"match": {"title": "рост"}},
+            {"match": {"title": "подорожание"}},
+            {"match": {"title": "увеличились"}}
+        ])
+
+    if any(word in q.lower() for word in ['бензин', 'топливо', 'бензиновый']):
+        must_not.extend([
+            {"match": {"text": "электромобиль"}},
+            {"match": {"text": "электроcar"}},
+            {"match": {"text": "tesla"}}
+        ])
+
+    if any(word in q.lower() for word in ['цена', 'цены', 'стоимость', 'прайс']):
+        should_queries.append({
+            "match": {
+                "title": {
+                    "query": "цена",
+                    "boost": 3.0
+                }
+            }
+        })
+
     if syn_q:
         should_queries.append({
             "multi_match": {
@@ -69,7 +130,7 @@ def build_query_body(q: str) -> dict:
                 "fields": fields,
                 "operator": "or",
                 "fuzziness": "AUTO",
-                "boost": 1.5
+                "boost": 1.8
             }
         })
 
@@ -78,22 +139,10 @@ def build_query_body(q: str) -> dict:
             "bool": {
                 "should": should_queries,
                 "minimum_should_match": 1,
-                "must_not": [
-                    {
-                        "match_phrase": {
-                            "title": "Главное за день"
-                        }
-                    },
-                    {
-                        "match_phrase": {
-                            "title": "главное за день"
-                        }
-                    }
-                ]
+                "must_not": must_not
             }
         }
     }
-
 def es_search(query: str, size: int = 30):
     body = build_query_body(query)
     r = requests.get(
