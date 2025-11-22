@@ -18,14 +18,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 URLS_FILE = "urls_auto.txt"
 OUT_FILE = "src/storage/data_auto.jsonl"
 MIN_CHARS = 400
-TARGET_DOCS = 6000      # по максимуму
+TARGET_DOCS = 6000
 
 
 def setup_driver():
     options = webdriver.ChromeOptions()
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    # options.add_argument("--headless=new")  # можно раскомментировать, чтобы браузер не показывался
 
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     return driver
@@ -53,7 +52,6 @@ def parse_article_html(html: str, url: str, min_chars: int):
     if meta_section:
         category = meta_section.get("content")
 
-    # самый надёжный вариант: берём весь текст страницы
     text = soup.get_text(" ", strip=True)
 
     if not text or len(text) < min_chars:
@@ -124,7 +122,6 @@ def main():
                 if saved >= TARGET_DOCS:
                     break
 
-                # несколько попыток на случай сбоев
                 html = None
                 for attempt in range(3):
                     try:

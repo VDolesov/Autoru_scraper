@@ -3,11 +3,10 @@ import time
 import requests
 from tqdm import tqdm
 
-# Отключаем предупреждения SSL (для разработки)
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-ES_URL = "http://localhost:9200"  # ИЗМЕНИЛ НА HTTP
+ES_URL = "http://localhost:9200"
 INDEX_NAME = "autoru_mag"
 DATA_FILE = "data_auto.jsonl"
 AUTH = ("admin", "StrongPassw0rd!")

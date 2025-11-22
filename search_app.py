@@ -8,61 +8,85 @@ INDEX_NAME = "autoru_mag"
 AUTH = ("admin", "StrongPassw0rd!")
 
 
-def load_synonyms():
-    path = Path(__file__).parent / "synonyms.json"
-    if not path.exists():
+SYNONYMS_FILE = Path("synonyms.json")
+SPELLFIX_FILE = Path("spellfix.json")
+
+
+def load_json_file(file_path: Path) -> dict:
+
+    if not file_path.exists():
+        print(f"[WARN] Файл не найден: {file_path}")
         return {}
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[ERROR] Ошибка загрузки {file_path}: {e}")
+        return {}
 
 
-SYN = load_synonyms()
+def normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
 
 
-def normalize_query(q: str) -> str:
-    return re.sub(r"\s+", " ", q.strip().lower())
+def apply_spellfix(text: str, spellfix: dict[str, str]) -> str:
+    if not isinstance(text, str):
+        return text
+
+    fixed_text = text
+    phrases = sorted(spellfix.keys(), key=len, reverse=True)
+
+    for phrase in phrases:
+        if phrase in fixed_text:
+            fixed_text = fixed_text.replace(phrase, spellfix[phrase])
+
+    return fixed_text
 
 
-def build_synonym_query(q: str) -> str | None:
-    q_norm = normalize_query(q)
-    phrases = list(SYN.keys())
-    phrases.sort(key=len, reverse=True)
-    used: list[str] = []
-    tmp = q_norm
+def expand_synonyms(text: str, synonyms: dict[str, list[str]]) -> list[str]:
+    tokens = normalize_text(text).split()
+    expanded = []
 
-    for p in phrases:
-        if p in tmp:
-            used.extend(SYN[p])
-            tmp = tmp.replace(p, " ")
+    for token in tokens:
+        expanded.append(token)
+        if token in synonyms:
+            expanded.extend(synonyms[token])
 
-    tokens = re.findall(r"\w+", tmp, flags=re.UNICODE)
-    for t in tokens:
-        if t in SYN:
-            used.extend(SYN[t])
+    return sorted(set(expanded))
 
-    if not used:
+
+def build_synonym_query(q: str, synonyms: dict) -> str | None:
+    q_norm = normalize_text(q)
+    expanded_tokens = expand_synonyms(q_norm, synonyms)
+
+    if len(expanded_tokens) <= 1:
         return None
-    return " ".join(sorted(set(used)))
+
+    return " ".join(expanded_tokens)
 
 
-def build_query_body(q: str) -> dict:
-    syn_q = build_synonym_query(q)
+def build_query_body(q: str, synonyms: dict, spellfix: dict) -> dict:
+
+    q_norm = normalize_text(q)
+    q_fixed = apply_spellfix(q_norm, spellfix)
+
+
+    syn_q = build_synonym_query(q_fixed, synonyms)
+
     fields = ["title^4", "text"]
+    should_queries = []
 
-
-    should_queries = [
-        {
-            "multi_match": {
-                "query": q,
-                "fields": fields,
-                "operator": "and",
-                "fuzziness": "AUTO",
-                "boost": 2.0
-            }
+    should_queries.append({
+        "multi_match": {
+            "query": q_fixed,
+            "fields": fields,
+            "operator": "and",
+            "fuzziness": "AUTO",
+            "boost": 2.0
         }
-    ]
+    })
 
-    year_match = re.search(r'\b(202[4-7])\b', q)
+    year_match = re.search(r'\b(202[4-7])\b', q_fixed)
     if year_match:
         year = year_match.group(1)
         should_queries.append({
@@ -74,7 +98,7 @@ def build_query_body(q: str) -> dict:
             }
         })
 
-    if any(term in q.lower() for term in ['vin', 'vincode', 'vin-код', 'вин']):
+    if any(term in q_fixed for term in ['vin', 'vincode', 'vin-код', 'вин']):
         should_queries.extend([
             {
                 "match_phrase": {
@@ -94,36 +118,7 @@ def build_query_body(q: str) -> dict:
             }
         ])
 
-    must_not = [
-        {"match_phrase": {"title": "Главное за день"}},
-        {"match_phrase": {"title": "главное за день"}}
-    ]
-
-    if any(word in q.lower() for word in ['снижение', 'падение', 'дешевеет']):
-        must_not.extend([
-            {"match": {"title": "рост"}},
-            {"match": {"title": "подорожание"}},
-            {"match": {"title": "увеличились"}}
-        ])
-
-    if any(word in q.lower() for word in ['бензин', 'топливо', 'бензиновый']):
-        must_not.extend([
-            {"match": {"text": "электромобиль"}},
-            {"match": {"text": "электроcar"}},
-            {"match": {"text": "tesla"}}
-        ])
-
-    if any(word in q.lower() for word in ['цена', 'цены', 'стоимость', 'прайс']):
-        should_queries.append({
-            "match": {
-                "title": {
-                    "query": "цена",
-                    "boost": 3.0
-                }
-            }
-        })
-
-    if syn_q:
+    if syn_q and syn_q != q_fixed:
         should_queries.append({
             "multi_match": {
                 "query": syn_q,
@@ -131,6 +126,37 @@ def build_query_body(q: str) -> dict:
                 "operator": "or",
                 "fuzziness": "AUTO",
                 "boost": 1.8
+            }
+        })
+
+    must_not = [
+        {"match_phrase": {"title": "Главное за день"}},
+        {"match_phrase": {"title": "главное за день"}}
+    ]
+
+    # Умные исключения
+    if any(word in q_fixed for word in ['снижение', 'падение', 'дешевеет']):
+        must_not.extend([
+            {"match": {"title": "рост"}},
+            {"match": {"title": "подорожание"}},
+            {"match": {"title": "увеличились"}}
+        ])
+
+    if any(word in q_fixed for word in ['бензин', 'топливо', 'бензиновый']):
+        must_not.extend([
+            {"match": {"text": "электромобиль"}},
+            {"match": {"text": "электроcar"}},
+            {"match": {"text": "tesla"}}
+        ])
+
+
+    if any(word in q_fixed for word in ['цена', 'цены', 'стоимость', 'прайс']):
+        should_queries.append({
+            "match": {
+                "title": {
+                    "query": "цена",
+                    "boost": 3.0
+                }
             }
         })
 
@@ -143,8 +169,10 @@ def build_query_body(q: str) -> dict:
             }
         }
     }
-def es_search(query: str, size: int = 30):
-    body = build_query_body(query)
+
+
+def es_search(query: str, synonyms: dict, spellfix: dict, size: int = 30):
+    body = build_query_body(query, synonyms, spellfix)
     r = requests.get(
         f"{ES_URL}/{INDEX_NAME}/_search",
         json=body,
@@ -156,8 +184,14 @@ def es_search(query: str, size: int = 30):
 
 
 def main():
-    print("=== Auto.ru Search ===")
-    print("Поиск по автомобильным статьям")
+    print("=== Auto.ru Search (Enhanced) ===")
+    print("Синонимы + Исправления опечаток + Умный поиск")
+
+    synonyms = load_json_file(SYNONYMS_FILE)
+    spellfix = load_json_file(SPELLFIX_FILE)
+
+    print(f"Загружено синонимов: {len(synonyms)}")
+    print(f"Загружено исправлений: {len(spellfix)}")
 
     while True:
         q = input("\n Запрос (пустой - выход): ").strip()
@@ -165,7 +199,7 @@ def main():
             break
 
         try:
-            resp = es_search(q, size=30)
+            resp = es_search(q, synonyms, spellfix, size=30)
             hits = resp.get("hits", {}).get("hits", [])
 
             if not hits:
@@ -179,8 +213,8 @@ def main():
                 score = float(h.get("_score", 0.0) or 0.0)
 
                 print(f"\n{i}. {s.get('title', 'Без заголовка')}")
-                print(f"   score: {score:.3f} |  категория: {s.get('category', 'Не указана')}")
-                print(f"    дата: {s.get('date', 'Не указана')}")
+                print(f"   score: {score:.3f} | категория: {s.get('category', 'Не указана')}")
+                print(f"   дата: {s.get('date', 'Не указана')}")
                 if s.get('url'):
                     print(f"   {s.get('url')}")
 
